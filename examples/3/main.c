@@ -1,94 +1,3 @@
-# Произведение матриц
-
-Чем больше регистров мы используем, тем меньше у нас thread'ов, которые мы можем использовать. **Occupancy** - сколько thread'ов мы используем относительно максимума. В целом, если доступов к памяти у нас относительно немного - ничего страшного. А вот если много - то можем встать в ожидании этого самого доступа к памяти.
-
-Компилятор может нам сказать, что пошло не так и у нас уменьшился Occupancy.
-
-Первый шаг к нашей первой лабораторной!!!
-
-Как бы было, если бы мы писали на процессоре:
-
-$N$ - x
-
-$K$ - общая размерность входных матриц
-
-$M$ - y
-
-```c
-for (y)
-    for (x)
-        for (k)
-            c[][] += a[][] * b[][]
-
-```
-
-На процессоре - норм.
-На видеокарте - ужасно медленно - 4 обращения к глобальной памяти за итерацию!!! (READ c, READ a, READ b, WRITE c)
-
-Первая оптимизация:
-
-```c
-for (y)
-    for (x)
-        {
-            sum = 0
-            for (k)
-                sum += a[][] * b[][]
-            c[][] = sum
-        }
-
-```
-
-Теперь у нас на каждой итерации всего лишь 2 обращения - (READ a, READ b)
-
-Сколько нам нужно thread'ов? Много (с)
-
-```c
-        uint x = get_global_id(0);
-        uint y = get_global_id(1);
-        {
-            sum = 0
-            for (k)
-                sum += a[][] * b[][]
-            c[][] = sum
-        }
-
-```
-
-Размерности - нулевая размерность будет соответствовать N, первая M;
-
-M, N, K передаем как unsigned int
-
-A имеет размер N х K, матрица B — K х M, и матрица C — N х M.
-
----
-
-Домашнее задание: 
-* сделать на хосте еще подсчет матриц с помощью OpenMP для сравнения.
-* Вычислить время работы kernel'а на OpenMP и Open CL
-* Сравнить время работы реализаций (Можно с помощью Events)
-* Измерить FLOPS
-
----
-
-`matrix-multiply.cl`
-
-```c
-kernel void mmul(global const float *a, global const float *b, global float *c, const uint n, const uint k, const uint m) {
-  uint x = get_global_id(0); 
-  uint y = get_global_id(1);
-  float sum = 0;
-  for (uint i = 0; i < k; i++) {
-    sum += a[y * k + i] * b[i * n + x];
-  }
-  c[y * n + x] = sum;
-}
-```
-
-`main.c`
-
-```c
-#include <CL/cl_platform.h>
 #include <stdlib.h>
 #ifdef __APPLE__
 #include <OpenCL/cl.h>
@@ -99,9 +8,7 @@ kernel void mmul(global const float *a, global const float *b, global float *c, 
 #include <assert.h>
 #include <stdio.h>
 
-#define N 3
-#define K 4
-#define M 5
+#define EXAMPLE_SIZE 1024
 
 int run_device(cl_device_id device_id);
 
@@ -147,7 +54,7 @@ int run_device(cl_device_id device_id) {
 
   // Загрузим программу в контекст
   FILE *aplusb_file =
-      fopen("/home/ildar/documents/uni/6sem/gpu/lec/code/4/matrix-multiply.cl",
+      fopen("../examples/3/aplusb.cl",
             "rb");                 // Откроем файл
   fseek(aplusb_file, 0, SEEK_END); // Поставим указатель на конец
   size_t aplusb_size = ftell(aplusb_file); // Запишем позицию конца
@@ -188,61 +95,50 @@ int run_device(cl_device_id device_id) {
   cl_command_queue command_queue =
       clCreateCommandQueue(context, device_id, 0, NULL);
 
-  // Получим идентификатор kernel'а
-  cl_kernel kernel = clCreateKernel(program, "mmul", NULL);
+  // Получим идентификатор кернела
+  cl_kernel kernel = clCreateKernel(program, "add", NULL);
 
-  // Выделим память на девайсе и поставим ее как аргументы kernel'а
+  // Выделим память на девайсе и поставим ее как аргументы кернела
   cl_mem a_mem = clCreateBuffer(context, CL_MEM_READ_ONLY,
-                                sizeof(cl_float) * M * K, NULL, NULL);
-  cl_mem b_mem = clCreateBuffer(context, CL_MEM_READ_ONLY,
-                                sizeof(cl_float) * K * N, NULL, NULL);
-  cl_mem c_mem = clCreateBuffer(context, CL_MEM_WRITE_ONLY,
-                                sizeof(cl_float) * M * N, NULL, NULL);
-
-  cl_uint n = N;
-  cl_uint k = K;
-  cl_uint m = M;
+                                sizeof(cl_int) * EXAMPLE_SIZE, NULL, NULL);
   clSetKernelArg(kernel, 0, sizeof(cl_mem), &a_mem);
+  cl_mem b_mem = clCreateBuffer(context, CL_MEM_READ_ONLY,
+                                sizeof(cl_int) * EXAMPLE_SIZE, NULL, NULL);
   clSetKernelArg(kernel, 1, sizeof(cl_mem), &b_mem);
+  cl_mem c_mem = clCreateBuffer(context, CL_MEM_WRITE_ONLY,
+                                sizeof(cl_int) * EXAMPLE_SIZE, NULL, NULL);
   clSetKernelArg(kernel, 2, sizeof(cl_mem), &c_mem);
-  clSetKernelArg(kernel, 3, sizeof(cl_uint), &n);
-  clSetKernelArg(kernel, 4, sizeof(cl_uint), &k);
-  clSetKernelArg(kernel, 5, sizeof(cl_uint), &m);
 
   // Поставим в очередь запись аргументов
-  cl_float a[M * K];
-  cl_float b[K * N];
-  for (int i = 0; i < M * K; i++) {
-    a[i] = 1;
+  cl_int a[EXAMPLE_SIZE];
+  cl_int b[EXAMPLE_SIZE];
+  for (int i = 0; i < EXAMPLE_SIZE; i++) {
+    a[i] = i;
+    b[i] = 3 * i;
   }
-
-  for (int i = 0; i < K * N; i++) {
-    b[i] = 2;
-  }
-  
   clEnqueueWriteBuffer(command_queue, a_mem, CL_FALSE, 0,
-                       sizeof(cl_float) * M * K, a, 0, NULL, NULL);
+                       sizeof(cl_int) * EXAMPLE_SIZE, a, 0, NULL, NULL);
   clEnqueueWriteBuffer(command_queue, b_mem, CL_FALSE, 0,
-                       sizeof(cl_float) * K * N, b, 0, NULL, NULL);
+                       sizeof(cl_int) * EXAMPLE_SIZE, b, 0, NULL, NULL);
 
-  // Поставим в очередь запуск kernel'а
-  size_t global_work_size[] = {N, M};
-  clEnqueueNDRangeKernel(command_queue, kernel, 2, NULL, global_work_size,
+  // Поставим в очередь запуск кернела
+  size_t global_work_size = EXAMPLE_SIZE;
+  clEnqueueNDRangeKernel(command_queue, kernel, 1, NULL, &global_work_size,
                          NULL, 0, NULL, NULL);
 
   // Поставим в очередь чтение ответа (в блокирующем режиме, что запустит нашу
   // программу)
-  cl_float c[M * N];
+  cl_int c[EXAMPLE_SIZE];
   clEnqueueReadBuffer(command_queue, c_mem, CL_TRUE, 0,
-                      sizeof(cl_float) * M * N, c, 0, NULL, NULL);
+                      sizeof(cl_int) * EXAMPLE_SIZE, c, 0, NULL, NULL);
 
   // Проверим
-  for (int i = 0; i < M; i++) {
-    for (int j = 0; j < N; j++) {
-      printf("%f ", c[i * N + j]);
-    }
-    printf("\n");
+  for (int i = 0; i < EXAMPLE_SIZE; i++) {
+    /*printf("Executed %d + %d successfully, got %d (expected %d).\n", a[i], b[i],
+           c[i], a[i] + b[i]);*/
+    assert(a[i] + b[i] == c[i]);
   }
+  printf("Executed a + b successfully.\n");
 
   // Приберемся напоследок
   clReleaseMemObject(a_mem);
@@ -270,4 +166,3 @@ int main() {
   free(platform_ids);
   return 0;
 }
-```
